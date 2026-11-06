@@ -135,12 +135,14 @@ TextPreparedPrompt PrepareQwenPrompt(
           encoder && has_images ? encoder->identity() : std::string_view{},
           max_context, request.cache_prompt ? &image_cache : nullptr));
   const auto cache_prefix = prompt->stable_prefix_tokens;
-  if (prompt->images.empty())
-    return {std::move(prompt->tokens), {}, cache_prefix};
-  if (!encoder)
+  if (!prompt->images.empty() && !encoder)
     throw std::invalid_argument(
         "image input requires a matching --mmproj BF16 sidecar");
   auto context = std::make_shared<QwenImageContext>();
+  context->cache_message_boundaries = std::move(prompt->message_boundaries);
+  context->cache_image_boundaries = std::move(prompt->image_boundaries);
+  if (prompt->images.empty())
+    return {std::move(prompt->tokens), std::move(context), cache_prefix};
   context->cache_identity = prompt->cache_identity;
   for (const auto& image : prompt->images) {
     const auto identity = prompt->IdentityForPrefix(image.grid.offset);

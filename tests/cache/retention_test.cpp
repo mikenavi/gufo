@@ -87,6 +87,41 @@ void Planning() {
   assert(GridLimit(8ULL << 30, 133'100'000) == 4);
   assert(GridLimit(1ULL << 30, 133'100'000) == 0);
   assert(GridLimit(1ULL << 30, 0) == 4);
+
+  const std::array<Rows, 3> boundaries{1501, 4501, 8701};
+  plan = PlanCaptures(adapter, *slot,
+                      {10000, 0, 1500, 0, false, false, {}, 0, boundaries});
+  expected = {1500, 1501, 4501, 8701, 10000};
+  assert(plan.size() == expected.size());
+  for (std::size_t i = 0; i < plan.size(); ++i)
+    assert(plan[i].boundary == expected[i]);
+  const std::array<Rows, 1> existing{4501};
+  plan = PlanCaptures(
+      adapter, *slot,
+      {10000, 4000, 4500, 0, false, false, existing, 0, boundaries});
+  assert(plan.size() == 4 && plan[0].boundary == 4000 &&
+         plan[2].boundary == 8701);
+}
+void SemanticBoundarySelection() {
+  std::vector<Rows> messages;
+  for (Rows n = 100; n <= 4000; n += 100)
+    messages.push_back(n);
+  const std::array<Rows, 10> images{100, 200, 300, 400, 500,
+                                    600, 700, 800, 900, 1000};
+  auto selected = HistoryBoundaries(messages, images, 16);
+  assert(selected.size() == 16 && selected.front() == 200 &&
+         selected[8] == 1000 && selected[9] == 3400 && selected.back() == 4000);
+  assert(
+      (HistoryBoundaries(messages, images, 2) == std::vector<Rows>{200, 300}));
+  assert(HistoryBoundaries(messages, images, 0).empty());
+  assert(HistoryBoundaries(messages, {}, 16).size() == 7);
+  // Once an image leaves the request, its old anchor is no longer protected.
+  const std::array<Rows, 1> remaining{900};
+  selected = HistoryBoundaries(messages, remaining, 16);
+  assert(selected.size() == 8 && selected.front() == 900);
+  // A recent message that also contains an image needs only one checkpoint.
+  const std::array<Rows, 1> recent_image{4000};
+  assert(HistoryBoundaries(messages, recent_image, 16).size() == 7);
 }
 void Branches() {
   for (bool branched : {false, true}) {
@@ -1201,6 +1236,7 @@ void WindowPeersAlignByRow() {
 }
 int main() {
   Planning();
+  SemanticBoundarySelection();
   Branches();
   RanksAndSources();
   LongPrefixRelationsAfterReplacement();

@@ -41,6 +41,13 @@ struct TextPromptContext {
   virtual ~TextPromptContext() = default;
   std::vector<std::uint8_t> cache_identity;
   std::vector<ContinuationInputPrefix> cache_prefixes;
+  /// Token offsets before complete chat messages, in ascending order. Literal
+  /// framing text in message content must not appear here. These are optional
+  /// cache hints; byte admission and model prefill boundaries still apply.
+  std::vector<std::size_t> cache_message_boundaries;
+  /// Message boundaries preceding images still present in this request.
+  /// Their checkpoints outlive recent text-only turns, within the RAM budget.
+  std::vector<std::size_t> cache_image_boundaries;
   [[nodiscard]] std::span<const std::uint8_t> CacheIdentity(
       std::size_t token_count) const {
     return PrefixInputIdentity(cache_identity, cache_prefixes, token_count);

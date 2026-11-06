@@ -690,13 +690,16 @@ struct ComponentTextCache::Lease::Impl {
       edit_boundaries{};
   std::size_t edit_boundary_count{};
   cache::ResourceCharge edit_metadata;
+  std::array<cache::Rows, 16> preferred_boundaries{};
+  std::size_t preferred_count{}, grid_limit{};
   SnapshotPurpose purpose{SnapshotPurpose::kContinuation};
   std::vector<cache::Token> capture_tokens;
   ContinuationLookup lookup_result;
   ComponentCacheMetrics metrics;
   Impl(ComponentTextCache::Impl* cache, ComponentTextCache::Impl::Entry* entry,
        cache::SlotLease slot, std::span<const cache::Token> prompt,
-       cache::InputIdentity input, std::size_t stable)
+       cache::InputIdentity input, std::size_t stable,
+       const TextPromptContext* context)
       : cache(cache),
         entry(entry),
         slot(std::move(slot)),
@@ -705,10 +708,32 @@ struct ComponentTextCache::Lease::Impl {
         input(std::move(input)),
         prompt(prompt.begin(), prompt.end()),
         stable(stable),
-        edit_metadata(cache->ledger
-                          .Reserve(cache::ResourceCategory::kMetadata,
-                                   sizeof(edit_boundaries))
-                          .Convert()) {}
+        edit_metadata(
+            cache->ledger
+                .Reserve(cache::ResourceCategory::kMetadata,
+                         sizeof(edit_boundaries) + sizeof(preferred_boundaries))
+                .Convert()) {
+    std::size_t private_bytes = 0;
+    for (const auto& d : cache->resources->adapter->Components())
+      if (d.kind == cache::ComponentKind::kPrivateState)
+        private_bytes += d.state_bytes;
+      else if (d.kind == cache::ComponentKind::kWindowRows)
+        private_bytes += (d.window_rows + d.rows_per_chunk - 1) * d.row_bytes;
+    grid_limit = cache::GridLimit(cache->budget, private_bytes);
+    if (context && !context->cache_message_boundaries.empty()) {
+      // Leave most of the budget for shared rows and continuation state.
+      const auto limit =
+          private_bytes
+              ? std::min<std::size_t>(16, cache->budget / 4 / private_bytes)
+              : 16;
+      const auto selected =
+          cache::HistoryBoundaries(context->cache_message_boundaries,
+                                   context->cache_image_boundaries, limit);
+      preferred_count = selected.size();
+      std::ranges::copy(selected, preferred_boundaries.begin());
+      grid_limit = std::min(grid_limit, limit - preferred_count);
+    }
+  }
   cache::RetentionRequest Retain(
       std::span<const cache::Token> tokens,
       std::optional<std::size_t> new_payload_bytes = {}) const {
@@ -1123,9 +1148,28 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
   std::unique_ptr<Lease> lease;
   try {
     auto slot = entry->slot->Acquire(live);
-    lease = std::make_unique<Lease>(std::make_unique<Lease::Impl>(
-        impl_.get(), entry, std::move(slot), prompt, input, stable));
+    lease = std::make_unique<Lease>(
+        std::make_unique<Lease::Impl>(impl_.get(), entry, std::move(slot),
+                                      prompt, input, stable, context.get()));
     auto& request = *lease->impl_;
+    // Keep useful anchors from earlier turns while this request captures its
+    // new history. Only compatible candidates were returned by the index.
+    const auto preferred =
+        std::span(request.preferred_boundaries).first(request.preferred_count);
+    for (const auto& candidate : found.candidates) {
+      if (!candidate.checkpoint || !context ||
+          !std::ranges::binary_search(preferred, candidate.boundary) ||
+          std::ranges::find(context->cache_image_boundaries,
+                            candidate.boundary) ==
+              context->cache_image_boundaries.end())
+        continue;
+      const auto protected_ids =
+          std::span(request.edit_boundaries).first(request.edit_boundary_count);
+      if (std::ranges::find(protected_ids, candidate.checkpoint->Id()) ==
+          protected_ids.end())
+        request.edit_boundaries[request.edit_boundary_count++] =
+            candidate.checkpoint->Id();
+    }
     request.persist = persist;
     request.state->SetCancellationCheck(cancelled);
     request.state->SetStopAtEos(stop_at_eos);
@@ -1816,18 +1860,8 @@ std::vector<std::size_t> ComponentTextCache::Lease::PlannedCaptures(
   // Off with no disk cache keeps no checkpoint, so skip the planning.
   if (!impl_->cache->ram_enabled && !impl_->cache->queue)
     return {};
-  const auto& adapter = *impl_->cache->resources->adapter;
-  // Each grid checkpoint keeps its private state and at most a window plus a
-  // partial leading chunk. Checkpoints closer than a window share those rows,
-  // so this bound can only plan fewer captures than RAM holds.
-  std::size_t private_bytes = 0;
-  for (const auto& d : adapter.Components())
-    if (d.kind == cache::ComponentKind::kPrivateState)
-      private_bytes += d.state_bytes;
-    else if (d.kind == cache::ComponentKind::kWindowRows)
-      private_bytes += (d.window_rows + d.rows_per_chunk - 1) * d.row_bytes;
   const auto plan = cache::PlanCaptures(
-      adapter, impl_->slot.Execution(),
+      *impl_->cache->resources->adapter, impl_->slot.Execution(),
       {impl_->prompt.size(),
        impl_->cached,
        stable,
@@ -1835,7 +1869,8 @@ std::vector<std::size_t> ComponentTextCache::Lease::PlannedCaptures(
        true,
        false,
        {},
-       cache::GridLimit(impl_->cache->budget, private_bytes)});
+       impl_->grid_limit,
+       std::span(impl_->preferred_boundaries).first(impl_->preferred_count)});
   std::vector<std::size_t> boundaries;
   for (const auto& capture : plan)
     if (!capture.required &&

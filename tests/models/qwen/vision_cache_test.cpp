@@ -115,6 +115,8 @@ void TestConcurrentMisses() {
 void EqualPrompts(const Prompt& a, const Prompt& b) {
   assert(a.tokens == b.tokens && a.rope == b.rope &&
          a.stable_prefix_tokens == b.stable_prefix_tokens &&
+         a.message_boundaries == b.message_boundaries &&
+         a.image_boundaries == b.image_boundaries &&
          a.cache_identity == b.cache_identity &&
          a.images.size() == b.images.size());
   for (std::size_t i = 0; i < a.images.size(); ++i) {
@@ -142,6 +144,32 @@ auto MakeTokenizer() {
   auto tokenizer = QwenTokenizer::CreateFromVocabulary(vocab, {}, specials);
   assert(tokenizer);
   return tokenizer;
+}
+
+void TestMessageBoundaries() {
+  using namespace gufo::tokenization;
+  const auto tokenizer = MakeTokenizer();
+  std::vector<ChatMessage> messages{{ChatRole::kUser, "literal <|im_start|>"},
+                                    {ChatRole::kAssistant, "done"},
+                                    {ChatRole::kUser, "next"}};
+  ChatTemplateOptions options;
+  options.enable_thinking = false;
+  options.preserve_thinking = false;
+  const auto text = Prepare(*tokenizer, messages, {}, options, "", 8192);
+  // Byte vocabulary: 6 user-header tokens + 20 content bytes + end/newline;
+  // then 11 assistant-header tokens + four content bytes + end/newline.
+  assert((text.message_boundaries == std::vector<std::size_t>{0, 28, 45}));
+  assert(text.image_boundaries.empty());
+  const auto reference =
+      QwenChatTemplate::RenderAndTokenize(*tokenizer, messages, {}, options);
+  assert(reference && text.tokens == *reference);
+  messages.back().images = {{2, Encoded(17)}, {2, Encoded(42)}};
+  const auto image =
+      Prepare(*tokenizer, messages, {}, options, "encoder", 8192);
+  assert(image.message_boundaries == text.message_boundaries);
+  assert((image.image_boundaries == std::vector<std::size_t>{45}));
+  assert(std::ranges::equal(std::span(text.tokens).first(45),
+                            std::span(image.tokens).first(45)));
 }
 
 void TestPromptIdentities() {
@@ -256,6 +284,7 @@ int main(int argc, char** argv) {
   TestReuseAndEviction();
   TestConcurrentMisses();
   TestPromptIdentities();
+  TestMessageBoundaries();
   TestDetailKeysCache();
   TestDetailPrompts();
   if (argc == 2 && std::string_view(argv[1]) == "--capacity-probe") {

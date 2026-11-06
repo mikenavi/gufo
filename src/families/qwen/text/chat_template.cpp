@@ -604,11 +604,14 @@ std::optional<std::string> QwenChatTemplate::Render(
     std::span<const ChatMessage> messages, std::span<const ChatTool> tools,
     const ChatTemplateOptions& options, std::string* error_msg,
     std::vector<std::size_t>* image_offsets, std::size_t* stable_prefix_bytes,
-    std::vector<ContentSpan>* content_spans) {
+    std::vector<ContentSpan>* content_spans,
+    std::vector<std::size_t>* message_offsets) {
   if (image_offsets != nullptr)
     image_offsets->clear();
   if (content_spans != nullptr)
     content_spans->clear();
+  if (message_offsets != nullptr)
+    message_offsets->clear();
   if (messages.empty()) {
     if (error_msg != nullptr) {
       *error_msg = "No messages provided";
@@ -715,6 +718,8 @@ std::optional<std::string> QwenChatTemplate::Render(
   for (const auto& span : system_content_spans)
     system_spans.push_back({system_content_offset + span.offset, span.size});
   if (!system_prefix.empty()) {
+    if (message_offsets != nullptr)
+      message_offsets->push_back(output.size());
     output.append(kImStart).append("system\n");
     const auto prefix_offset = output.size();
     output.append(system_prefix);
@@ -762,6 +767,8 @@ std::optional<std::string> QwenChatTemplate::Render(
     const auto& msg = messages[message_index];
     const bool tool_result = msg.role == ChatRole::kTool;
     if (tool_result) {
+      if (message_offsets != nullptr)
+        message_offsets->push_back(output.size());
       output.append(kImStart).append("user\n");
       while (message_index < messages.size() &&
              messages[message_index].role == ChatRole::kTool) {
@@ -792,6 +799,8 @@ std::optional<std::string> QwenChatTemplate::Render(
              message_index == last_user_index)
       final_user_start = output.size();
     const auto role_name = ToString(msg.role);
+    if (message_offsets != nullptr)
+      message_offsets->push_back(output.size());
     output.append(kImStart);
     output.append(role_name);
     output.push_back('\n');

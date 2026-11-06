@@ -214,6 +214,46 @@ void Prefill(TextRunnerPool::Request& request) {
   while (!request.prefill_complete())
     (void)request.Prefill(8);
 }
+void ImageAnchorSurvivesTextOnlyTurns() {
+  for (const bool in_pass : {false, true}) {
+    auto runner = std::make_shared<Runner>();
+    runner->in_pass = in_pass;
+    TextRunnerPool pool(runner, 1);
+    std::vector<TextRunnerToken> prompt(80);
+    std::iota(prompt.begin(), prompt.end(), 10);
+    auto context = std::make_shared<TextPromptContext>();
+    context->cache_message_boundaries = {9, 25, 41, 57, 73};
+    context->cache_image_boundaries = {25};
+    for (int turn = 0; turn < 12; ++turn) {
+      auto request =
+          pool.Acquire(prompt, sampling::SamplingConfig{}, {}, context);
+      Prefill(request);
+      const auto output = request.SelectNext().token;
+      request.Advance();
+      (void)request.Commit();
+      context = std::make_shared<TextPromptContext>(*context);
+      prompt.push_back(output);
+      context->cache_message_boundaries.push_back(prompt.size());
+      prompt.insert(prompt.end(), 8, 500 + turn);
+    }
+    // Removing an old image changes its message, well before the recent seven
+    // messages. Resume immediately before that message, not from zero.
+    prompt[25] += 10000;
+    context = std::make_shared<TextPromptContext>(*context);
+    context->cache_image_boundaries.clear();
+    auto edited = pool.Acquire(prompt, sampling::SamplingConfig{}, {}, context);
+    assert(edited.cached_prompt_tokens() == 25);
+    Prefill(edited);
+    const auto restored = edited.SelectNext().token;
+    edited.Invalidate();
+    auto cold =
+        pool.Acquire(prompt, sampling::SamplingConfig{}, {}, context, false);
+    assert(!cold.cache_hit());
+    Prefill(cold);
+    assert(cold.SelectNext().token == restored);
+    cold.Invalidate();
+  }
+}
 TextRunnerToken Generate(TextRunnerPool::Request& request) {
   const auto token = request.SelectNext().token;
   request.Advance();
@@ -2834,6 +2874,7 @@ void IndivisibleInputsAreNotSplit() {
   }
 }
 int main() {
+  ImageAnchorSurvivesTextOnlyTurns();
   IndivisibleInputsAreNotSplit();
   PromptReuseCanBeDisabledPerRequest();
   StableChatPrefixSurvivesInterruptedFraming();

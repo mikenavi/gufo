@@ -30,7 +30,13 @@ struct CapturePlanRequest {
   std::span<const Rows> already_retained;
   // Keeps the shallowest eligible grid points, including retained ones.
   std::size_t grid_limit{4};
+  std::span<const Rows> preferred;
 };
+// Prefer anchors before images, then recent messages. The caller limits the
+// count to what its byte budget can retain; raw prompts keep the grid policy.
+[[nodiscard]] std::vector<Rows> HistoryBoundaries(
+    std::span<const Rows> messages, std::span<const Rows> images,
+    std::size_t limit);
 // One optional grid point per twelve private states the RAM budget holds,
 // up to four. Speculative edit boundaries then cannot crowd out the
 // conversations a small budget is meant to keep.
