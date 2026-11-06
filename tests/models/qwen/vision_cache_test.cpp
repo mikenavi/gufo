@@ -172,6 +172,50 @@ void TestMessageBoundaries() {
                             std::span(image.tokens).first(45)));
 }
 
+void TestToolImageBoundaries() {
+  using namespace gufo::tokenization;
+  const auto tokenizer = MakeTokenizer();
+  const auto page = Encoded(17);
+  ChatTemplateOptions options;
+  options.enable_thinking = false;
+  for (const bool split : {false, true}) {
+    for (const bool hoisted_system : {false, true}) {
+      std::vector<ChatMessage> messages{{ChatRole::kUser, "Read the pages."},
+                                        {ChatRole::kAssistant, "Opening them."},
+                                        {ChatRole::kTool, "Page 1 metadata"},
+                                        {ChatRole::kTool, "Page 2 metadata"}};
+      if (hoisted_system)
+        messages.push_back({ChatRole::kDeveloper, "Keep reading."});
+      if (split)
+        messages.push_back(
+            {ChatRole::kUser, "Attached image(s) from tool result:"});
+      const auto owner = split ? messages.size() - 1 : 3;
+      messages[owner].images = {{messages[owner].content.size(), page},
+                                {messages[owner].content.size(), page}};
+      messages.push_back({ChatRole::kAssistant, "I read them."});
+      const auto warm =
+          Prepare(*tokenizer, messages, {}, options, "encoder", 8192);
+      // pi moves tool images to a following user message. Hiding them adds
+      // notes to the earlier tool text and removes that user message.
+      auto hidden = messages;
+      hidden[owner].images.clear();
+      hidden[3].content += "\n[Earlier images removed]";
+      if (split)
+        hidden.erase(hidden.begin() + owner);
+      const auto edited = Prepare(*tokenizer, hidden, {}, options, "", 8192);
+      std::size_t common = 0;
+      while (common < std::min(warm.tokens.size(), edited.tokens.size()) &&
+             warm.tokens[common] == edited.tokens[common])
+        ++common;
+      const auto tool_boundary =
+          warm.message_boundaries[hoisted_system ? 3 : 2];
+      assert(
+          (warm.image_boundaries == std::vector<std::size_t>{tool_boundary}));
+      assert(tool_boundary <= common);
+    }
+  }
+}
+
 void TestPromptIdentities() {
   using namespace gufo::tokenization;
   const auto tokenizer = MakeTokenizer();
@@ -285,6 +329,7 @@ int main(int argc, char** argv) {
   TestConcurrentMisses();
   TestPromptIdentities();
   TestMessageBoundaries();
+  TestToolImageBoundaries();
   TestDetailKeysCache();
   TestDetailPrompts();
   if (argc == 2 && std::string_view(argv[1]) == "--capacity-probe") {
