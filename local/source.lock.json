@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "runtime": "gufo",
+  "repository": "https://github.com/mikenavi/gufo.git",
+  "upstream": "https://github.com/gufo-org/gufo.git",
+  "upstream_base": "211dba49fa736466d55feb66870aeeff05bef38a",
+  "feature_commits": [
+    "bf213345ebfe54854a2b0833e57b19c45926ac7d"
+  ],
+  "contribution_branch": "fix/history-cache-boundaries",
+  "contribution_commit": "e6427f963280a93f84152392abeed647537a4213",
+  "product_files": {
+    "README.fleet.md": "cd28d406cd4d5248f0caa4c8781a137d8295249da528168f3cac645d0f56ef9e",
+    "include/gufo/ext/changes/0.2/chat-history-cache-boundaries.md": "aefe44ad767d74bd4382fb8d482606f7d2f5bdb7c8b31dfb99cc612067cff819",
+    "local/build-release.sh": "474745a3b21ba4b21032c9a0dbf10f71cbfb0e808e4741cb2f2d6fc91d0b1235",
+    "src/cache/retention.cpp": "9c631b73c00ea352f1be830f955dcfa1e42fb200e50cef74e0b5fbd363687339",
+    "src/cache/retention.hpp": "24376dee39b1a1289e0c22c119ccd4f0059e5315113df82cc39f307165f73420",
+    "src/cli/serve/component_text_cache.cpp": "008225faa4daafb027aaaa59c90c6500641d3947e4d6ee0502b20a979f50829b",
+    "src/ext/text.hpp": "5afe29b03e578de550647de8a3a714c0e718c3cc3a49a46f78fb0d820da6a70b",
+    "src/families/qwen/text/chat_template.cpp": "3f30ca48bb644014c9b247266a28ca29225444cddf82e99909c1bc81c906b424",
+    "src/families/qwen/text/chat_template.hpp": "2f944cdd8d348d62cad5154f7ce5171ca2f2d362ae4630d2f4509d4e47f84312",
+    "src/families/qwen/vision/prompt.cpp": "61abf80631d979424b9c9fef6a0196ac858b2b7178072a83b66fb1278cbdf32a",
+    "src/families/qwen/vision/prompt.hpp": "73f9baff7f6af92053ffcb23beff0664e315c5785351ef95d30b3b38cf7a5b11",
+    "src/models/qwen38_flash_next/runner.cpp": "cd055d2ac00f7f054f36d8d9fb14c25943f2c5cc4e24864bb20b7a31a5734788",
+    "tests/cache/retention_test.cpp": "acc668170a825470a4e907a4f0d249860520ff2810a15a6472328ae70d2e1793",
+    "tests/cli/component_text_cache_test.cpp": "defb5933abf10f598d7b86a2718f0ccd31ac9f70c8a3b6f2f71125425ab230d4",
+    "tests/models/qwen/vision_cache_test.cpp": "ceb138ea62dd12ab41c0079826b1e53cd20e70ba15448405831bac1794c01e9f"
+  }
+}
