@@ -1193,19 +1193,34 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
     // new history. Only compatible candidates were returned by the index.
     const auto preferred =
         std::span(request.preferred_boundaries).first(request.preferred_count);
-    for (const auto& candidate : found.candidates) {
-      if (!candidate.checkpoint || !context ||
-          !std::ranges::binary_search(preferred, candidate.boundary) ||
-          std::ranges::find(context->cache_image_boundaries,
-                            candidate.boundary) ==
+    const std::size_t alignment = std::max<std::size_t>(
+        1, impl_->runner->Descriptor().capabilities.prefill_alignment);
+    for (auto boundary : preferred) {
+      if (!context ||
+          std::ranges::find(context->cache_image_boundaries, boundary) ==
               context->cache_image_boundaries.end())
         continue;
-      const auto protected_ids =
-          std::span(request.edit_boundaries).first(request.edit_boundary_count);
-      if (std::ranges::find(protected_ids, candidate.checkpoint->Id()) ==
-          protected_ids.end())
-        request.edit_boundaries[request.edit_boundary_count++] =
-            candidate.checkpoint->Id();
+      // Match the aligned legal stop actually captured by the text runner.
+      for (;;) {
+        const auto aligned = boundary - boundary % alignment;
+        const auto next = context->PrefillStop(aligned, false);
+        if (next > aligned)
+          throw std::logic_error(
+              "prompt context moved a prefill stop the wrong way");
+        if (next == boundary)
+          break;
+        boundary = next;
+      }
+      for (const auto& candidate : found.candidates) {
+        if (!candidate.checkpoint || candidate.boundary != boundary)
+          continue;
+        const auto protected_ids = std::span(request.edit_boundaries)
+                                       .first(request.edit_boundary_count);
+        if (std::ranges::find(protected_ids, candidate.checkpoint->Id()) ==
+            protected_ids.end())
+          request.edit_boundaries[request.edit_boundary_count++] =
+              candidate.checkpoint->Id();
+      }
     }
     request.persist = persist;
     request.state->SetCancellationCheck(cancelled);
@@ -1240,8 +1255,6 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
     // The complete prompt stays off the alignment for an unchanged retry,
     // which continues it without prefill; a longer prompt takes an aligned
     // boundary instead (TextRunnerCapabilities::prefill_alignment).
-    const std::size_t alignment = std::max<std::size_t>(
-        1, impl_->runner->Descriptor().capabilities.prefill_alignment);
     for (const auto& candidate : found.candidates) {
       if (restored || (cancelled && cancelled()))
         break;

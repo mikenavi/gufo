@@ -330,6 +330,7 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
        encoder_identity.size()});
   std::size_t cursor = 0;
   std::size_t index = 0;
+  bool after_tools = false;
   for (const auto& message : messages) {
     for (const auto& image : message.images) {
       if (encoder_identity.empty()) {
@@ -339,6 +340,15 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
       if (index >= offsets.size())
         throw std::logic_error("image rendering lost a part");
       append(cursor, offsets[index]);
+      auto anchor = std::prev(prompt.message_boundaries.end());
+      // Clients can move tool images to a following user message. Hiding
+      // them can also change the preceding tool text, so protect that group.
+      if (after_tools && message.role == tokenization::ChatRole::kUser &&
+          anchor != prompt.message_boundaries.begin())
+        --anchor;
+      if (prompt.image_boundaries.empty() ||
+          prompt.image_boundaries.back() != *anchor)
+        prompt.image_boundaries.push_back(*anchor);
       auto pixels = image_cache
                         ? image_cache->Get(image.bytes, image.detail)
                         : std::make_shared<const core::Image>(ResizeImage(
@@ -359,6 +369,10 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
       prompt.images.push_back({std::move(pixels), grid, identity.Digest()});
       cursor = offsets[index++] + tokenization::kImagePad.size();
     }
+    // Render hoists system/developer turns before grouping tool results.
+    if (message.role != tokenization::ChatRole::kSystem &&
+        message.role != tokenization::ChatRole::kDeveloper)
+      after_tools = message.role == tokenization::ChatRole::kTool;
   }
   append(cursor, rendered->size());
   // The boundary starts a special token (the assistant turn, or a final user
@@ -371,14 +385,6 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
       !std::ranges::equal(suffix, std::span(prompt.tokens).last(suffix.size())))
     throw std::logic_error("Qwen stable prefix is not a token boundary");
   prompt.stable_prefix_tokens = prompt.tokens.size() - suffix.size();
-  for (const auto& image : prompt.images) {
-    const auto after =
-        std::ranges::upper_bound(prompt.message_boundaries, image.grid.offset);
-    if (after != prompt.message_boundaries.begin() &&
-        (prompt.image_boundaries.empty() ||
-         prompt.image_boundaries.back() != *std::prev(after)))
-      prompt.image_boundaries.push_back(*std::prev(after));
-  }
   prompt.rope.Validate(max_context);
   if (!prompt.images.empty()) {
     const auto digest = identity.Finish();
