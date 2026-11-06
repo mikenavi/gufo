@@ -284,12 +284,13 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
                std::string_view encoder_identity, std::uint32_t max_context,
                ImageCache* image_cache) {
   std::vector<std::size_t> offsets;
+  std::vector<std::size_t> message_offsets;
   std::vector<tokenization::ContentSpan> content_spans;
   std::size_t stable_prefix_bytes = 0;
   std::string error;
   const auto rendered = tokenization::QwenChatTemplate::Render(
       messages, tools, options, &error, &offsets, &stable_prefix_bytes,
-      &content_spans);
+      &content_spans, &message_offsets);
   if (!rendered)
     throw std::invalid_argument(error);
   Prompt prompt;
@@ -297,7 +298,7 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
   tok_options.add_bos = false;
   tok_options.add_eos = false;
   tok_options.parse_special_tokens = true;
-  const auto append = [&](std::size_t begin, std::size_t end) {
+  const auto encode = [&](std::size_t begin, std::size_t end) {
     auto tokens = tokenization::QwenChatTemplate::EncodeRendered(
         tokenizer, *rendered, begin, end, content_spans, tok_options);
     if (tokens.size() > max_context - prompt.tokens.size()) {
@@ -306,6 +307,19 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
           "-token context; increase --context or shorten the conversation");
     }
     prompt.tokens.insert(prompt.tokens.end(), tokens.begin(), tokens.end());
+  };
+  std::size_t message_index = 0;
+  const auto append = [&](std::size_t begin, std::size_t end) {
+    // Message starts are framing-token boundaries. Splitting there keeps the
+    // token stream exact, including literal control-token text in content.
+    while (message_index < message_offsets.size() &&
+           message_offsets[message_index] < end) {
+      const auto boundary = message_offsets[message_index++];
+      encode(begin, boundary);
+      prompt.message_boundaries.push_back(prompt.tokens.size());
+      begin = boundary;
+    }
+    encode(begin, end);
   };
   crypto::Sha256Hasher identity;
   constexpr auto version = kImagePreprocessingVersion;
@@ -357,6 +371,14 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
       !std::ranges::equal(suffix, std::span(prompt.tokens).last(suffix.size())))
     throw std::logic_error("Qwen stable prefix is not a token boundary");
   prompt.stable_prefix_tokens = prompt.tokens.size() - suffix.size();
+  for (const auto& image : prompt.images) {
+    const auto after =
+        std::ranges::upper_bound(prompt.message_boundaries, image.grid.offset);
+    if (after != prompt.message_boundaries.begin() &&
+        (prompt.image_boundaries.empty() ||
+         prompt.image_boundaries.back() != *std::prev(after)))
+      prompt.image_boundaries.push_back(*std::prev(after));
+  }
   prompt.rope.Validate(max_context);
   if (!prompt.images.empty()) {
     const auto digest = identity.Finish();

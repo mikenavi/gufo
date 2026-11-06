@@ -33,6 +33,28 @@ std::size_t GridLimit(std::size_t ram_bytes, std::size_t private_bytes) {
              ? std::min<std::size_t>(4, ram_bytes / 12 / private_bytes)
              : 4;
 }
+std::vector<Rows> HistoryBoundaries(std::span<const Rows> messages,
+                                    std::span<const Rows> images,
+                                    std::size_t limit) {
+  std::vector<Rows> selected;
+  limit = std::min<std::size_t>(limit, 16);
+  selected.reserve(limit);
+  const auto add = [&](Rows boundary) {
+    if (boundary && selected.size() < limit &&
+        std::ranges::find(selected, boundary) == selected.end())
+      selected.push_back(boundary);
+  };
+  // Preserve up to nine image anchors even during a long text-only stretch.
+  // Within a smaller budget the oldest visible images are removed first.
+  for (const auto boundary :
+       images.last(std::min<std::size_t>(9, images.size())))
+    add(boundary);
+  const auto recent = messages.last(std::min<std::size_t>(7, messages.size()));
+  for (auto i = recent.rbegin(); i != recent.rend(); ++i)
+    add(*i);
+  std::ranges::sort(selected);
+  return selected;
+}
 std::vector<CaptureCandidate> PlanCaptures(const Adapter& adapter,
                                            const Slot& slot,
                                            const CapturePlanRequest& r) {
@@ -69,6 +91,11 @@ std::vector<CaptureCandidate> PlanCaptures(const Adapter& adapter,
   add(r.reused, CheckpointPurpose::kPrompt, true);
   add(r.stable, CheckpointPurpose::kPrompt, true);
   add(r.prompt, CheckpointPurpose::kPrompt, true);
+  for (const auto boundary : r.preferred) {
+    if (boundary > r.prompt)
+      throw std::invalid_argument("history boundary outside prompt");
+    add(boundary, CheckpointPurpose::kGrid, false);
+  }
   if (r.grid && r.prompt) {
     const Rows grid = (r.prompt - 1) / 2048;
     const Rows count = std::min<Rows>(grid, 4);

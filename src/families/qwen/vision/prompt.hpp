@@ -52,6 +52,8 @@ struct Prompt {
   std::vector<tokenization::TokenId> tokens;
   /// Frontier unchanged when an interrupted assistant is followed by a user.
   std::size_t stable_prefix_tokens{0};
+  std::vector<std::size_t> message_boundaries;
+  std::vector<std::size_t> image_boundaries;
   RopeLayout rope;
   std::vector<PreparedImage> images;
   /// SHA-256 covers decoded pixels, grid placement, preprocessing version,
