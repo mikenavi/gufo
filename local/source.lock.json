@@ -5,25 +5,26 @@
   "upstream": "https://github.com/gufo-org/gufo.git",
   "upstream_base": "211dba49fa736466d55feb66870aeeff05bef38a",
   "feature_commits": [
-    "bf213345ebfe54854a2b0833e57b19c45926ac7d"
+    "bf213345ebfe54854a2b0833e57b19c45926ac7d",
+    "581464358261122a1e29c90ad4156715a9381767"
   ],
   "contribution_branch": "fix/history-cache-boundaries",
-  "contribution_commit": "e6427f963280a93f84152392abeed647537a4213",
+  "contribution_commit": "d56ce9c248804a08440759260543e7db1ba0edbd",
   "product_files": {
-    "README.fleet.md": "cd28d406cd4d5248f0caa4c8781a137d8295249da528168f3cac645d0f56ef9e",
+    "README.fleet.md": "f8d8dbf49dc02cd7c23a32e7f0e2466f3887415b43e8c0238d52637ccf6d0614",
     "include/gufo/ext/changes/0.2/chat-history-cache-boundaries.md": "aefe44ad767d74bd4382fb8d482606f7d2f5bdb7c8b31dfb99cc612067cff819",
     "local/build-release.sh": "474745a3b21ba4b21032c9a0dbf10f71cbfb0e808e4741cb2f2d6fc91d0b1235",
     "src/cache/retention.cpp": "9c631b73c00ea352f1be830f955dcfa1e42fb200e50cef74e0b5fbd363687339",
     "src/cache/retention.hpp": "24376dee39b1a1289e0c22c119ccd4f0059e5315113df82cc39f307165f73420",
-    "src/cli/serve/component_text_cache.cpp": "008225faa4daafb027aaaa59c90c6500641d3947e4d6ee0502b20a979f50829b",
+    "src/cli/serve/component_text_cache.cpp": "918b6e427286496c9431475af2f4ac00eb9a0cf0970a0a2cd0c38db4350e420f",
     "src/ext/text.hpp": "5afe29b03e578de550647de8a3a714c0e718c3cc3a49a46f78fb0d820da6a70b",
     "src/families/qwen/text/chat_template.cpp": "3f30ca48bb644014c9b247266a28ca29225444cddf82e99909c1bc81c906b424",
     "src/families/qwen/text/chat_template.hpp": "2f944cdd8d348d62cad5154f7ce5171ca2f2d362ae4630d2f4509d4e47f84312",
-    "src/families/qwen/vision/prompt.cpp": "61abf80631d979424b9c9fef6a0196ac858b2b7178072a83b66fb1278cbdf32a",
+    "src/families/qwen/vision/prompt.cpp": "b53bdeadc592b7bffaed1b68056863d3d70da7e0f0efec8d5904bb716514b997",
     "src/families/qwen/vision/prompt.hpp": "73f9baff7f6af92053ffcb23beff0664e315c5785351ef95d30b3b38cf7a5b11",
     "src/models/qwen38_flash_next/runner.cpp": "cd055d2ac00f7f054f36d8d9fb14c25943f2c5cc4e24864bb20b7a31a5734788",
     "tests/cache/retention_test.cpp": "acc668170a825470a4e907a4f0d249860520ff2810a15a6472328ae70d2e1793",
-    "tests/cli/component_text_cache_test.cpp": "defb5933abf10f598d7b86a2718f0ccd31ac9f70c8a3b6f2f71125425ab230d4",
-    "tests/models/qwen/vision_cache_test.cpp": "ceb138ea62dd12ab41c0079826b1e53cd20e70ba15448405831bac1794c01e9f"
+    "tests/cli/component_text_cache_test.cpp": "7406e70a7e4c58e51433fb63b1213839d90a8a0767faaecd2d0d3186b9c01b09",
+    "tests/models/qwen/vision_cache_test.cpp": "6be48776d90f9d9c13cbc4150fa7eb7fc23a0ac55f0929c12d9dfb728025be35"
   }
 }
