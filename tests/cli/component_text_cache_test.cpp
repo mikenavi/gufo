@@ -326,7 +326,7 @@ void AlignedPrefillKeepsAlignedBoundaries() {
   auto runner = std::make_shared<Runner>();
   runner->alignment = 4;
   runner->in_pass = true;
-  TextRunnerPool pool(runner, 2);
+  TextRunnerPool pool(runner, 2, {}, {.retry_gap_tokens = 0});
   // The stable boundary 35 starts the final user turn.
   auto seed =
       pool.Acquire(prompt, sampling::SamplingConfig{}, {}, {}, true, 35);
@@ -381,7 +381,7 @@ void UnalignedPromptEndPublishesBeforeDroppingTheFrontier() {
   auto runner = std::make_shared<Runner>();
   runner->alignment = 4;
   runner->in_pass = true;
-  TextRunnerPool pool(runner, 2);
+  TextRunnerPool pool(runner, 2, {}, {.retry_gap_tokens = 0});
   auto seed =
       pool.Acquire(prompt, sampling::SamplingConfig{}, {}, {}, true, 35);
   Prefill(seed);
@@ -990,11 +990,14 @@ void PartialFrontierDoesNotServeAnEqualPrompt() {
     resend.Invalidate();
   }
 }
-void CompletedCancelledPromptGetsARetrySnapshot() {
+void CompletedCancelledPromptCanRetryFromItsFallback(bool skip_nearby) {
   auto runner = std::make_shared<Runner>();
   runner->partial = true;
   runner->in_pass = true;
-  TextRunnerPool pool(runner, 1);
+  TextRunnerRamCacheOptions ram;
+  if (!skip_nearby)
+    ram.retry_gap_tokens = 0;
+  TextRunnerPool pool(runner, 1, {}, ram);
   std::vector<TextRunnerToken> prompt(40);
   std::iota(prompt.begin(), prompt.end(), 10);
   {
@@ -1007,7 +1010,7 @@ void CompletedCancelledPromptGetsARetrySnapshot() {
   auto resumed = pool.Acquire(prompt, {}, {}, {}, true, 35);
   assert(resumed.cached_prompt_tokens() == prompt.size());
   const auto expected = Generate(resumed);
-  assert(resumed.Commit().snapshot_bytes > 0);
+  assert((resumed.Commit().snapshot_bytes == 0) == skip_nearby);
   // Replace the execution slot so only immutable checkpoints can serve retry.
   auto unrelated = prompt;
   unrelated.front() = 999;
@@ -1015,7 +1018,8 @@ void CompletedCancelledPromptGetsARetrySnapshot() {
   Prefill(replacement);
   (void)replacement.Commit();
   auto replay = pool.Acquire(prompt, {}, {}, {}, true, 35);
-  assert(replay.cached_prompt_tokens() == prompt.size());
+  assert(replay.cached_prompt_tokens() == (skip_nearby ? 35 : prompt.size()));
+  Prefill(replay);
   assert(Generate(replay) == expected);
   replay.Invalidate();
 }
@@ -1226,10 +1230,13 @@ void WarmTurnsAdvanceTheStableCheckpoint() {
   (void)second.Commit();
 
   auto repeated = acquire({1, 2, 3, 40, 41, reply, 7, 40, 41}, 7);
-  Expect(repeated.cached_prompt_tokens() == 9 && repeated.prefill_complete(),
-         "an identical prompt reuses the complete prompt checkpoint");
+  Expect(repeated.cached_prompt_tokens() == 7,
+         "an identical prompt reuses the nearby stable checkpoint");
+  const auto tail = repeated.Prefill(64);
+  Expect(tail.consumed_tokens == 2 && tail.decode_ready,
+         "retry only prefills the assistant framing");
   Expect(Generate(repeated) == again,
-         "the complete checkpoint preserves greedy selection");
+         "retry from the stable checkpoint preserves greedy selection");
   (void)repeated.Commit();
 
   // Dropped reasoning rewrites 40,41 at token 7, the last stable boundary.
@@ -2778,6 +2785,45 @@ std::vector<TextRunnerToken> SpanPrompt(std::size_t tokens) {
   std::iota(prompt.begin(), prompt.end(), 10);
   return prompt;
 }
+void NearbyRetryNeedsAnExactRestorablePrefix() {
+  auto runner = std::make_shared<Runner>();
+  runner->alignment = 4;
+  ComponentTextCache cache(runner, 1, 1 << 24, {});
+  const auto prompt = SpanPrompt(193);
+  auto context = Spans({});
+  context->cache_prefixes = {{128, {1}}};
+  context->cache_identity = {2};
+  {
+    auto seed = cache.Acquire(prompt, {}, context, true, 128, true);
+    auto& state = dynamic_cast<State&>(seed->state());
+    const auto prefix = std::span(prompt).first(128);
+    runner->adapter->Append(state.slot, prefix, prefix);
+    assert(seed->TryReserveSnapshot(seed->CaptureBytes(), 128, false,
+                                    SnapshotPurpose::kHistory, {}));
+    assert(seed->PublishSnapshot({prefix.begin(), prefix.end()},
+                                 seed->Capture(), false));
+  }
+  const auto reserve = [&](std::span<const TextRunnerToken> tokens,
+                           const std::shared_ptr<SpanContext>& input,
+                           SnapshotPurpose purpose = SnapshotPurpose::kRetry) {
+    auto lease = cache.Acquire(tokens, {}, input, true, 128, true);
+    return lease->TryReserveSnapshot(0, tokens.size(), false, purpose, {});
+  };
+  const auto within_gap = std::span(prompt).first(192);
+  assert(!reserve(within_gap, context));
+  assert(reserve(prompt, context));
+  assert(reserve(within_gap, context, SnapshotPurpose::kContinuation));
+
+  auto changed_tokens = std::vector(within_gap.begin(), within_gap.end());
+  ++changed_tokens[127];
+  assert(reserve(changed_tokens, context));
+  auto changed_input = std::make_shared<SpanContext>(*context);
+  changed_input->cache_prefixes.front().identity = {3};
+  assert(reserve(within_gap, changed_input));
+  auto indivisible = std::make_shared<SpanContext>(*context);
+  indivisible->spans = {{124, 132}};
+  assert(reserve(within_gap, indivisible));
+}
 void IndivisibleInputsAreNotSplit() {
   using Stops = std::vector<std::size_t>;
   using Context = std::shared_ptr<const TextPromptContext>;
@@ -2938,6 +2984,7 @@ void IndivisibleInputsAreNotSplit() {
 }
 int main() {
   ImageAnchorSurvivesTextOnlyTurns();
+  NearbyRetryNeedsAnExactRestorablePrefix();
   IndivisibleInputsAreNotSplit();
   PromptReuseCanBeDisabledPerRequest();
   StableChatPrefixSurvivesInterruptedFraming();
@@ -2951,7 +2998,8 @@ int main() {
   BackingPreparationFollowsCaptures();
   PrefillLookaheadReachesTheNextFrontier();
   PartialFrontierDoesNotServeAnEqualPrompt();
-  CompletedCancelledPromptGetsARetrySnapshot();
+  CompletedCancelledPromptCanRetryFromItsFallback(true);
+  CompletedCancelledPromptCanRetryFromItsFallback(false);
   BudgetUsesAllocatedSlotsInsteadOfLazyStateClaim();
   InPassCapturePreservesBoundaryAndLiveTail();
   AlignedPrefillKeepsAlignedBoundaries();

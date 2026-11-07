@@ -80,8 +80,10 @@ struct TextPreparedPrompt {
 
 struct TextRunnerRamCacheOptions {
   static constexpr std::size_t kAutomaticMaxBytes = std::size_t{32} << 30;
+  static constexpr std::size_t kDefaultRetryGapTokens = 64;
   std::size_t capacity_bytes{0};
   bool enabled{true};
+  std::size_t retry_gap_tokens{kDefaultRetryGapTokens};
 };
 
 [[nodiscard]] std::optional<TextRunnerRamCacheOptions> ParseRamCacheOption(

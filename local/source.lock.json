@@ -6,25 +6,34 @@
   "upstream_base": "211dba49fa736466d55feb66870aeeff05bef38a",
   "feature_commits": [
     "bf213345ebfe54854a2b0833e57b19c45926ac7d",
-    "581464358261122a1e29c90ad4156715a9381767"
+    "581464358261122a1e29c90ad4156715a9381767",
+    "b49b1140fce6c93ecf1c38822d3c3c3731482c8c",
+    "62a9a4dc51d4decba7b3d1568fc200cf538971ef"
   ],
   "contribution_branch": "fix/history-cache-boundaries",
   "contribution_commit": "d56ce9c248804a08440759260543e7db1ba0edbd",
   "product_files": {
     "README.fleet.md": "f8d8dbf49dc02cd7c23a32e7f0e2466f3887415b43e8c0238d52637ccf6d0614",
+    "docs/SERVER.md": "ae0f8d742cfdb5e7d1df0fe330874270ac342ce7aea43a8368743a3ff9303dd0",
     "include/gufo/ext/changes/0.2/chat-history-cache-boundaries.md": "aefe44ad767d74bd4382fb8d482606f7d2f5bdb7c8b31dfb99cc612067cff819",
+    "include/gufo/ext/changes/0.2/ram-retry-prefix-gap.md": "caf3c359513ad2cb7212e795679b0574157fe15be37e5ff6ba707224e9854fc6",
+    "include/gufo/ext/core_options.def": "7ce1d4bbcf633306f958d701610843944f738a55b53142d4b613d47a9435d90b",
     "local/build-release.sh": "474745a3b21ba4b21032c9a0dbf10f71cbfb0e808e4741cb2f2d6fc91d0b1235",
     "src/cache/retention.cpp": "9c631b73c00ea352f1be830f955dcfa1e42fb200e50cef74e0b5fbd363687339",
     "src/cache/retention.hpp": "24376dee39b1a1289e0c22c119ccd4f0059e5315113df82cc39f307165f73420",
-    "src/cli/serve/component_text_cache.cpp": "918b6e427286496c9431475af2f4ac00eb9a0cf0970a0a2cd0c38db4350e420f",
-    "src/ext/text.hpp": "5afe29b03e578de550647de8a3a714c0e718c3cc3a49a46f78fb0d820da6a70b",
+    "src/cli/serve/component_text_cache.cpp": "99ab42f6f53f2f0252bf5e08d85eb0027790076b9db52135a9acd9a0fa971ef5",
+    "src/cli/serve/component_text_cache.hpp": "79d84359539221a0787d372fc2f5b12a8a92bf73188781cad7cc4aeedc2e6471",
+    "src/cli/serve/serve.cpp": "8a85d73b727a05c1443fcf642e0a5d06fb489df6b01325d55d11e3e23b839476",
+    "src/cli/serve/text_model_runner.cpp": "49236f13f44d8839d5a523fb4ccce4661ea05fc0f381e8acdd8e2cf90c5907b5",
+    "src/ext/text.hpp": "0465fdb87edfdf54406d686d665de26254fd82617aff2c834d5954ccc0625af9",
     "src/families/qwen/text/chat_template.cpp": "3f30ca48bb644014c9b247266a28ca29225444cddf82e99909c1bc81c906b424",
     "src/families/qwen/text/chat_template.hpp": "2f944cdd8d348d62cad5154f7ce5171ca2f2d362ae4630d2f4509d4e47f84312",
     "src/families/qwen/vision/prompt.cpp": "b53bdeadc592b7bffaed1b68056863d3d70da7e0f0efec8d5904bb716514b997",
     "src/families/qwen/vision/prompt.hpp": "73f9baff7f6af92053ffcb23beff0664e315c5785351ef95d30b3b38cf7a5b11",
     "src/models/qwen38_flash_next/runner.cpp": "cd055d2ac00f7f054f36d8d9fb14c25943f2c5cc4e24864bb20b7a31a5734788",
     "tests/cache/retention_test.cpp": "acc668170a825470a4e907a4f0d249860520ff2810a15a6472328ae70d2e1793",
-    "tests/cli/component_text_cache_test.cpp": "7406e70a7e4c58e51433fb63b1213839d90a8a0767faaecd2d0d3186b9c01b09",
+    "tests/cli/component_text_cache_test.cpp": "69fbd726d05c74ecd5c4d03e5dc562fa817e3944da23fff4d604ab7de9f95a97",
+    "tests/cli/serve_test.py": "40b5a54642d0dd48333bead2d7f8afca5bd5214e78ae3dc465bd5355a8533f25",
     "tests/models/qwen/vision_cache_test.cpp": "6be48776d90f9d9c13cbc4150fa7eb7fc23a0ac55f0929c12d9dfb728025be35"
   }
 }

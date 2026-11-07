@@ -99,6 +99,13 @@ def main():
     for value in ("OFF", "-1", "16G"):
         check(["serve", "llm", "--cache-ram-bytes", value], 2,
               "--cache-ram-bytes must be off or a byte count")
+    assert "--cache-retry-gap-tokens <N>" in help_text
+    for value in ("0", "24", "64"):
+        check(["serve", "llm", "--cache-retry-gap-tokens", value,
+               "--cache-ram-bytes", "536870912", "--model", "missing.gguf"],
+              1, "Error loading model 'missing.gguf'")
+    check(["serve", "llm", "--cache-retry-gap-tokens", "-1"], 2,
+          "Invalid integer for --cache-retry-gap-tokens")
     assert ("each session stays native until it holds more than 262144 tokens"
             in help_text)
     # The flag is a plain switch: it must not swallow the next argument.

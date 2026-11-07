@@ -232,6 +232,13 @@ Growth stops early while the host would keep less than 4 GiB available. The page
 tails and idle-session spill; there is no separate spill option.
 Under pressure, optional copies give way before another conversation's last useful checkpoint.
 
+With `--cache-retry-gap-tokens 64` (the default), a RAM-only retry checkpoint
+is skipped if a published RAM checkpoint covers an exact, restorable prefix
+up to 64 tokens shorter. A retry can restore that checkpoint and prefill the
+remaining tokens. The prefix must match both tokens and input identity, such
+as images. Use `--cache-retry-gap-tokens 0` to disable the check. The option
+applies only to optional RAM retry checkpoints.
+
 `--cache-ram-bytes off` keeps no RAM cache. The server retains and captures no
 checkpoint in RAM and pins no cache memory, except up to 512 MiB of backing that
 Qwen and Flash-Next use for captures when `--cache-disk` is set. Each session

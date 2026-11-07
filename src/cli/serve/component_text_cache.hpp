@@ -72,11 +72,13 @@ public:
   // the budget plus those pins, within the host ceiling. With `ram_enabled`
   // false, ram_bytes is ignored: no checkpoint stays in RAM and no backing is
   // committed, unless a disk cache needs some to stage captures.
-  ComponentTextCache(std::shared_ptr<TextModelRunner>, std::size_t,
-                     std::size_t ram_bytes,
-                     const std::optional<TextRunnerDiskCacheOptions>&,
-                     bool automatic_ram = false, std::size_t ceiling_bytes = 0,
-                     bool ram_enabled = true);
+  ComponentTextCache(
+      std::shared_ptr<TextModelRunner>, std::size_t, std::size_t ram_bytes,
+      const std::optional<TextRunnerDiskCacheOptions>&,
+      bool automatic_ram = false, std::size_t ceiling_bytes = 0,
+      bool ram_enabled = true,
+      std::size_t retry_gap_tokens =
+          ext::TextRunnerRamCacheOptions::kDefaultRetryGapTokens);
   ~ComponentTextCache();
   [[nodiscard]] std::unique_ptr<Lease> Acquire(
       std::span<const ContinuationToken>, const std::function<bool()>&,
