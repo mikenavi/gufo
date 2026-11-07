@@ -1485,6 +1485,96 @@ void LiveTurnKeepsFallbackWhenReplacementDoesNotFit() {
   assert(hash == runner->adapter->RecurrentHash(
                      dynamic_cast<State&>(cold->state()).slot));
 }
+void HistoryCaptureRetriesWhenBackingImproves() {
+  struct PressureRunner final : Runner {
+    mutable cache::ResourceCharge pool, occupied;
+    mutable std::size_t refused_bytes{}, probes{};
+    std::unique_ptr<ComponentCacheResources> CreateComponentCacheResources(
+        cache::ResourceLedger& ledger, std::size_t ram) const override {
+      auto resources = Runner::CreateComponentCacheResources(ledger, ram);
+      pool =
+          ledger.Reserve(cache::ResourceCategory::kBackingFree, 64).Convert();
+      occupied =
+          pool.ReserveBacking(cache::ResourceCategory::kPrivateState).Convert();
+      resources->can_capture = [this](auto payloads) {
+        ++probes;
+        const auto bytes = std::accumulate(
+            payloads.begin(), payloads.end(), std::size_t{0},
+            [](auto sum, const auto& payload) { return sum + payload.bytes; });
+        return !occupied || bytes < refused_bytes;
+      };
+      return resources;
+    }
+  };
+  for (const bool cheaper : {false, true}) {
+    auto runner = std::make_shared<PressureRunner>();
+    ComponentTextCache cache(runner, 1, 1 << 22, {});
+    std::vector<TextRunnerToken> prompt(100);
+    std::iota(prompt.begin(), prompt.end(), 10);
+    const auto append = [&](auto& lease, auto first, auto end) {
+      auto& state = dynamic_cast<State&>(lease->state());
+      const auto part = std::span(prompt).subspan(first, end - first);
+      runner->adapter->Append(state.slot, part, part);
+    };
+    constexpr std::size_t target = 96;
+    const auto reserve = [&](auto& lease) {
+      return lease->TryReserveSnapshot(lease->CaptureBytes(), target, false,
+                                       SnapshotPurpose::kHistory);
+    };
+    auto original_input = std::make_shared<TextPromptContext>();
+    original_input->cache_identity = {1};
+    {
+      auto first = cache.Acquire(prompt, {}, original_input, false, 0, true);
+      append(first, 0, target);
+      runner->refused_bytes = first->CaptureBytes();
+      assert(reserve(first));
+      bool refused = false;
+      try {
+        (void)first->Capture();
+      } catch (const cache::ResourceExhausted&) {
+        refused = true;
+      }
+      assert(refused && runner->probes);
+    }
+    {
+      auto repeat = cache.Acquire(prompt, {}, original_input, false, 0, true);
+      append(repeat, 0, target);
+      assert(repeat->CaptureBytes() == runner->refused_bytes);
+      const auto probes = runner->probes;
+      assert(!reserve(repeat));
+      assert(runner->probes == probes);
+      assert(repeat->TryReserveSnapshot(repeat->CaptureBytes(), target, false,
+                                        SnapshotPurpose::kContinuation));
+    }
+    {
+      auto other_input = std::make_shared<TextPromptContext>(*original_input);
+      other_input->cache_identity = {2};
+      auto unrelated = cache.Acquire(prompt, {}, other_input, false, 0, true);
+      append(unrelated, 0, target);
+      assert(reserve(unrelated));
+    }
+    if (cheaper) {
+      auto seed = cache.Acquire(prompt, {}, original_input, false, 0, true);
+      append(seed, 0, 64);
+      assert(seed->TryReserveSnapshot(seed->CaptureBytes(), 64, false,
+                                      SnapshotPurpose::kContinuation));
+      assert(seed->PublishSnapshot({prompt.begin(), prompt.begin() + 64},
+                                   seed->Capture(), false));
+    } else {
+      runner->occupied = {};
+    }
+    auto improved = cache.Acquire(prompt, {}, original_input, true, 0, true);
+    assert(improved->cached_tokens() == (cheaper ? 64 : 0));
+    append(improved, improved->cached_tokens(), target);
+    if (cheaper)
+      assert(improved->CaptureBytes() < runner->refused_bytes);
+    else
+      assert(improved->CaptureBytes() == runner->refused_bytes);
+    assert(reserve(improved));
+    assert(improved->PublishSnapshot({prompt.begin(), prompt.begin() + target},
+                                     improved->Capture(), false));
+  }
+}
 void ReusedConversationOutlivesOneUseRequests() {
   // Backing holds three private states. A continued conversation keeps its
   // latest boundary while newer one-use requests replace each other.
@@ -3021,6 +3111,7 @@ int main() {
   ReuseAndBranches();
   EditBoundariesSurviveActualBackingPressure();
   LiveTurnKeepsFallbackWhenReplacementDoesNotFit();
+  HistoryCaptureRetriesWhenBackingImproves();
   ReusedConversationOutlivesOneUseRequests();
   RestartAndCorruption();
   FailedCaptureKeepsPublishedBoundary();

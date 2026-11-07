@@ -239,6 +239,11 @@ remaining tokens. The prefix must match both tokens and input identity, such
 as images. Use `--cache-retry-gap-tokens 0` to disable the check. The option
 applies only to optional RAM retry checkpoints.
 
+After a backing allocation fails, Gufo remembers a bounded set of optional
+history checkpoints by exact token prefix and input identity. It defers another
+attempt until the estimated new payload shrinks or committed free backing
+increases enough to cover the estimate.
+
 `--cache-ram-bytes off` keeps no RAM cache. The server retains and captures no
 checkpoint in RAM and pins no cache memory, except up to 512 MiB of backing that
 Qwen and Flash-Next use for captures when `--cache-disk` is set. Each session

@@ -41,6 +41,18 @@ cache::Identity At(const cache::InputIdentity& input, std::size_t boundary) {
   const auto bytes = input.At(boundary);
   return {bytes.begin(), bytes.end()};
 }
+constexpr auto kFreeBacking =
+    static_cast<std::size_t>(cache::ResourceCategory::kBackingFree);
+
+cache::CompatibilityDigest HistoryKey(std::span<const cache::Token> tokens,
+                                      const cache::InputIdentity& input) {
+  crypto::Sha256Hasher hash;
+  hash.Update({reinterpret_cast<const std::uint8_t*>(tokens.data()),
+               tokens.size_bytes()});
+  hash.Update(input.At(tokens.size()));
+  return hash.Finish();
+}
+
 std::size_t PayloadBytes(const cache::DiskManifest& manifest) {
   std::size_t bytes = 0;
   for (const auto& component : manifest.components) {
@@ -220,6 +232,21 @@ struct ComponentTextCache::Impl {
   bool ram_enabled{true};
   std::size_t retry_gap_tokens;
   cache::ResourceCharge metadata;
+  struct HistoryRefusal {
+    std::size_t boundary{}, bytes{}, free_backing{};
+    cache::CompatibilityDigest key{};
+  };
+  std::array<HistoryRefusal, 64> history_refusals{};
+  std::size_t next_history_refusal{};
+
+  // The caller holds mutex. A zero boundary marks a vacant record.
+  HistoryRefusal* FindHistoryRefusal(std::size_t boundary,
+                                     const cache::CompatibilityDigest& key) {
+    for (auto& record : history_refusals)
+      if (record.boundary == boundary && record.key == key)
+        return &record;
+    return nullptr;
+  }
 
   Impl(std::shared_ptr<TextModelRunner> runner, std::size_t count,
        std::size_t ram, std::size_t slot_ceiling,
@@ -696,6 +723,7 @@ struct ComponentTextCache::Lease::Impl {
   std::array<cache::Rows, 16> preferred_boundaries{};
   std::size_t preferred_count{}, grid_limit{};
   SnapshotPurpose purpose{SnapshotPurpose::kContinuation};
+  std::optional<cache::CompatibilityDigest> history_key;
   std::vector<cache::Token> capture_tokens;
   ContinuationLookup lookup_result;
   ComponentCacheMetrics metrics;
@@ -1591,6 +1619,37 @@ bool ComponentTextCache::Lease::TryReserveSnapshot(
       // Let ordinary retention try to reclaim space if the lookup cannot fit.
     }
   }
+  impl_->history_key.reset();
+  if (purpose == SnapshotPurpose::kHistory) {
+    bool known_boundary;
+    {
+      const std::lock_guard lock(cache.mutex);
+      known_boundary = std::ranges::any_of(
+          cache.history_refusals,
+          [&](const auto& record) { return record.boundary == tokens.size(); });
+    }
+    if (known_boundary) {
+      impl_->history_key = HistoryKey(tokens, impl_->input);
+      bool defer = false;
+      {
+        const std::lock_guard lock(cache.mutex);
+        if (const auto* record =
+                cache.FindHistoryRefusal(tokens.size(), *impl_->history_key);
+            record && bytes >= record->bytes) {
+          const auto free = cache.ledger.Snapshot().bytes[kFreeBacking];
+          defer = free <= record->free_backing || free < bytes;
+        }
+      }
+      if (defer) {
+        Logger::Info("cache",
+                     "schema=component-cache-v1 event=history_capture_deferred "
+                     "tokens=" +
+                         std::to_string(tokens.size()) +
+                         " bytes=" + std::to_string(bytes));
+        return false;
+      }
+    }
+  }
   impl_->capture_boundary = boundary;
   impl_->capture_tokens.assign(tokens.begin(), tokens.end());
   impl_->preserve_source = preserve;
@@ -1661,8 +1720,10 @@ std::unique_ptr<ContinuationSnapshot> ComponentTextCache::Lease::Capture() {
   std::shared_ptr<const cache::Checkpoint> checkpoint;
   std::size_t captured_capacity = 0;
   std::size_t borrowed_capacity = 0, copied_payload = 0;
+  bool backing_refused = false;
   while (true) {
     try {
+      backing_refused = false;
       captured_capacity = 0;
       borrowed_capacity = copied_payload = 0;
       cache::ResourceReservation buffer_metadata;
@@ -1734,8 +1795,10 @@ std::unique_ptr<ContinuationSnapshot> ComponentTextCache::Lease::Capture() {
                 // and allocate their rows again after their last owner leaves.
                 borrowed.clear();
                 buffers.clear();
-                if (!reclaim())
+                if (!reclaim()) {
+                  backing_refused = true;
                   throw;
+                }
               }
             }
             TransferBatch transfers(cache.resources->transfer_batch_size);
@@ -1795,6 +1858,29 @@ std::unique_ptr<ContinuationSnapshot> ComponentTextCache::Lease::Capture() {
             throw;
           }
         }
+        if (backing_refused && request.purpose == SnapshotPurpose::kHistory) {
+          try {
+            const auto room = cache.ledger.Snapshot();
+            if (room.peak_bytes[kFreeBacking]) {
+              if (!request.history_key)
+                request.history_key =
+                    HistoryKey(request.capture_tokens, request.input);
+              const std::lock_guard lock(cache.mutex);
+              const auto boundary = request.capture_tokens.size();
+              auto* record =
+                  cache.FindHistoryRefusal(boundary, *request.history_key);
+              if (!record) {
+                record = &cache.history_refusals[cache.next_history_refusal];
+                cache.next_history_refusal = (cache.next_history_refusal + 1) %
+                                             cache.history_refusals.size();
+              }
+              *record = {boundary, bytes, room.bytes[kFreeBacking],
+                         *request.history_key};
+            }
+          } catch (...) {
+            // A refusal hint is optional under memory pressure.
+          }
+        }
         // RAM refused the copy; the disk fallback, when there is one, already
         // holds a checkpoint within its step of this boundary.
         refused();
@@ -1804,6 +1890,12 @@ std::unique_ptr<ContinuationSnapshot> ComponentTextCache::Lease::Capture() {
       failed(error);
       throw;
     }
+  }
+  if (request.purpose == SnapshotPurpose::kHistory && request.history_key) {
+    const std::lock_guard lock(cache.mutex);
+    if (auto* record = cache.FindHistoryRefusal(request.capture_tokens.size(),
+                                                *request.history_key))
+      *record = {};
   }
   ++request.metrics.captures;
   request.metrics.captured_checkpoint_ids.push_back(checkpoint->Id().value);
