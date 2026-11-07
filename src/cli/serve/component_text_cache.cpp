@@ -1158,6 +1158,22 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
         std::span(request.preferred_boundaries).first(request.preferred_count);
     const std::size_t alignment = std::max<std::size_t>(
         1, impl_->runner->Descriptor().capabilities.prefill_alignment);
+    const auto whole_inputs = [&](std::size_t boundary) {
+      return !context || context->PrefillStop(boundary, false) == boundary;
+    };
+    if (context && !context->cache_message_boundaries.empty()) {
+      // A live continuation may have no restored source. Preserve one
+      // usable chat checkpoint while later captures compete for backing.
+      for (const auto& candidate : found.candidates) {
+        if (candidate.checkpoint && candidate.boundary <= stable &&
+            candidate.boundary % alignment == 0 &&
+            whole_inputs(candidate.boundary)) {
+          request.edit_boundaries[request.edit_boundary_count++] =
+              candidate.checkpoint->Id();
+          break;
+        }
+      }
+    }
     for (auto boundary : preferred) {
       if (!context ||
           std::ranges::find(context->cache_image_boundaries, boundary) ==
@@ -1199,11 +1215,7 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
       return boundary < prompt.size() ||
              impl_->runner->HasDecodeFrontier(*request.state);
     };
-    // Prefill must not resume inside an indivisible input of this prompt,
-    // which a checkpoint from another prompt with the same tokens can do.
-    const auto whole_inputs = [&](std::size_t boundary) {
-      return !context || context->PrefillStop(boundary, false) == boundary;
-    };
+    // A matching checkpoint can still fall inside an indivisible input.
     if (live && (!decodable(found.selected->boundary) ||
                  !whole_inputs(found.selected->boundary))) {
       live.reset();

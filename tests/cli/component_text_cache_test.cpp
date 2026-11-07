@@ -1423,6 +1423,61 @@ void EditBoundariesSurviveActualBackingPressure() {
            cold_runner->adapter->RecurrentHash(control_state.slot));
   }
 }
+void LiveTurnKeepsFallbackWhenReplacementDoesNotFit() {
+  auto runner = std::make_shared<Runner>();
+  runner->alignment = 4;
+  runner->rows_per_chunk = 64;
+  runner->row_backing_bytes = 64 * sizeof(cache::Token);
+  ComponentTextCache cache(runner, 1, 1 << 24, {});
+  auto context = std::make_shared<TextPromptContext>();
+  context->cache_message_boundaries = {128, 144};
+  std::vector<TextRunnerToken> prompt(144);
+  std::iota(prompt.begin(), prompt.end(), 10);
+  const auto append = [&](auto& lease, std::span<const TextRunnerToken> part) {
+    auto& state = dynamic_cast<State&>(lease->state());
+    runner->adapter->Append(state.slot, part, part);
+  };
+  {
+    auto seed = cache.Acquire(prompt, {}, context, true, 128, true);
+    append(seed, std::span(prompt).first(128));
+    assert(seed->TryReserveSnapshot(seed->CaptureBytes(), 128, false,
+                                    SnapshotPurpose::kHistory, {}));
+    assert(seed->PublishSnapshot({prompt.begin(), prompt.begin() + 128},
+                                 seed->Capture(), false));
+    append(seed, std::span(prompt).subspan(128));
+    (void)seed->Commit({}, {}, prompt);
+  }
+  prompt.resize(5001, 42);
+  {
+    auto warm = cache.Acquire(prompt, {}, context, true, 5000, true);
+    assert(warm->cached_tokens() == 144 && !warm->restored_snapshot_bytes());
+    append(warm, std::span(prompt).subspan(144, 5000 - 144));
+    // The 32 KiB physical row pool cannot store this replacement. Reclaim
+    // must keep a restorable prefix even though this turn used a live slot.
+    assert(warm->TryReserveSnapshot(warm->CaptureBytes(), 5000, false,
+                                    SnapshotPurpose::kHistory, {}));
+    bool refused = false;
+    try {
+      (void)warm->Capture();
+    } catch (const cache::ResourceExhausted&) {
+      refused = true;
+    }
+    assert(refused);
+    append(warm, std::span(prompt).last(1));
+    (void)warm->Commit({}, {}, prompt);
+  }
+  ++prompt.back();
+  auto edited = cache.Acquire(prompt, {}, context, true, 5000, true);
+  assert(edited->cached_tokens() == 128);
+  append(edited, std::span(prompt).subspan(128));
+  const auto hash = runner->adapter->RecurrentHash(
+      dynamic_cast<State&>(edited->state()).slot);
+  edited->Invalidate();
+  auto cold = cache.Acquire(prompt, {}, context, false, 5000, true);
+  append(cold, prompt);
+  assert(hash == runner->adapter->RecurrentHash(
+                     dynamic_cast<State&>(cold->state()).slot));
+}
 void ReusedConversationOutlivesOneUseRequests() {
   // Backing holds three private states. A continued conversation keeps its
   // latest boundary while newer one-use requests replace each other.
@@ -2917,6 +2972,7 @@ int main() {
   ColdSideRequestsKeepPreservedDeepFrontier();
   ReuseAndBranches();
   EditBoundariesSurviveActualBackingPressure();
+  LiveTurnKeepsFallbackWhenReplacementDoesNotFit();
   ReusedConversationOutlivesOneUseRequests();
   RestartAndCorruption();
   FailedCaptureKeepsPublishedBoundary();
