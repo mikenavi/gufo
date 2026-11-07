@@ -218,10 +218,17 @@ void AddCacheRamOption(gufo::cli::ArgParser& parser,
       "Cache",
       [target](std::string_view, std::string_view value, std::string* error) {
         const auto parsed = server::ParseRamCacheOption(value, error);
-        if (parsed)
-          *target = *parsed;
-        return parsed.has_value();
+        if (!parsed)
+          return false;
+        target->capacity_bytes = parsed->capacity_bytes;
+        target->enabled = parsed->enabled;
+        return true;
       });
+  parser.AddOption(
+      "", "--cache-retry-gap-tokens", "N",
+      "Skip RAM-only retry checkpoints within N tokens of a restorable exact "
+      "prefix (default: 64; 0 disables)",
+      "Cache", &target->retry_gap_tokens);
 }
 
 void AddServerOptions(gufo::cli::ArgParser& parser, std::string* host,

@@ -218,12 +218,13 @@ struct ComponentTextCache::Impl {
   // RAM backing committed only to copy captures on their way to disk.
   std::size_t disk_backing{};
   bool ram_enabled{true};
+  std::size_t retry_gap_tokens;
   cache::ResourceCharge metadata;
 
   Impl(std::shared_ptr<TextModelRunner> runner, std::size_t count,
        std::size_t ram, std::size_t slot_ceiling,
        const std::optional<TextRunnerDiskCacheOptions>& options,
-       bool automatic_ram, bool ram_on)
+       bool automatic_ram, bool ram_on, std::size_t retry_gap)
       : runner(std::move(runner)),
         // Disk transfers lease one fixed pinned staging buffer. Its size does
         // not change restore or write speed (#562), and a larger one only
@@ -235,7 +236,8 @@ struct ComponentTextCache::Impl {
         identity(resources->adapter->CompatibilityIdentity()),
         index(ledger),
         retention(ledger, index, &events),
-        ram_enabled(ram_on) {
+        ram_enabled(ram_on),
+        retry_gap_tokens(retry_gap) {
     metadata = ledger.Reserve(cache::ResourceCategory::kMetadata, sizeof(Impl))
                    .Convert();
     crypto::Sha256Hasher hash;
@@ -679,6 +681,7 @@ struct ComponentTextCache::Lease::Impl {
   cache::SlotLease slot;
   std::unique_ptr<TextRunnerState> state;
   cache::InputIdentity input;
+  std::shared_ptr<const TextPromptContext> context;
   std::vector<cache::Token> prompt;
   std::size_t cached{}, restored{}, stable{}, capture_boundary{};
   double restore_time{};
@@ -699,13 +702,14 @@ struct ComponentTextCache::Lease::Impl {
   Impl(ComponentTextCache::Impl* cache, ComponentTextCache::Impl::Entry* entry,
        cache::SlotLease slot, std::span<const cache::Token> prompt,
        cache::InputIdentity input, std::size_t stable,
-       const TextPromptContext* context)
+       const std::shared_ptr<const TextPromptContext>& context)
       : cache(cache),
         entry(entry),
         slot(std::move(slot)),
         state(cache->runner->BindComponentState(*cache->resources->adapter,
                                                 this->slot.Execution())),
         input(std::move(input)),
+        context(context),
         prompt(prompt.begin(), prompt.end()),
         stable(stable),
         edit_metadata(
@@ -733,6 +737,9 @@ struct ComponentTextCache::Lease::Impl {
       std::ranges::copy(selected, preferred_boundaries.begin());
       grid_limit = std::min(grid_limit, limit - preferred_count);
     }
+  }
+  bool WholeInputs(std::size_t boundary) const {
+    return !context || context->PrefillStop(boundary, false) == boundary;
   }
   cache::RetentionRequest Retain(
       std::span<const cache::Token> tokens,
@@ -1002,10 +1009,10 @@ ComponentTextCache::Lease::Impl::CaptureDurable() {
 ComponentTextCache::ComponentTextCache(
     std::shared_ptr<TextModelRunner> runner, std::size_t count, std::size_t ram,
     const std::optional<TextRunnerDiskCacheOptions>& disk, bool automatic_ram,
-    std::size_t ceiling, bool ram_enabled)
+    std::size_t ceiling, bool ram_enabled, std::size_t retry_gap_tokens)
     : impl_(std::make_unique<Impl>(std::move(runner), count, ram,
                                    std::max(ram, ceiling), disk, automatic_ram,
-                                   ram_enabled)) {}
+                                   ram_enabled, retry_gap_tokens)) {}
 ComponentTextCache::~ComponentTextCache() = default;
 std::size_t ComponentTextCache::capacity() const noexcept {
   return impl_->entries.size();
@@ -1148,9 +1155,8 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
   std::unique_ptr<Lease> lease;
   try {
     auto slot = entry->slot->Acquire(live);
-    lease = std::make_unique<Lease>(
-        std::make_unique<Lease::Impl>(impl_.get(), entry, std::move(slot),
-                                      prompt, input, stable, context.get()));
+    lease = std::make_unique<Lease>(std::make_unique<Lease::Impl>(
+        impl_.get(), entry, std::move(slot), prompt, input, stable, context));
     auto& request = *lease->impl_;
     // Keep useful anchors from earlier turns while this request captures its
     // new history. Only compatible candidates were returned by the index.
@@ -1158,16 +1164,13 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
         std::span(request.preferred_boundaries).first(request.preferred_count);
     const std::size_t alignment = std::max<std::size_t>(
         1, impl_->runner->Descriptor().capabilities.prefill_alignment);
-    const auto whole_inputs = [&](std::size_t boundary) {
-      return !context || context->PrefillStop(boundary, false) == boundary;
-    };
     if (context && !context->cache_message_boundaries.empty()) {
       // A live continuation may have no restored source. Preserve one
       // usable chat checkpoint while later captures compete for backing.
       for (const auto& candidate : found.candidates) {
         if (candidate.checkpoint && candidate.boundary <= stable &&
             candidate.boundary % alignment == 0 &&
-            whole_inputs(candidate.boundary)) {
+            request.WholeInputs(candidate.boundary)) {
           request.edit_boundaries[request.edit_boundary_count++] =
               candidate.checkpoint->Id();
           break;
@@ -1217,7 +1220,7 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
     };
     // A matching checkpoint can still fall inside an indivisible input.
     if (live && (!decodable(found.selected->boundary) ||
-                 !whole_inputs(found.selected->boundary))) {
+                 !request.WholeInputs(found.selected->boundary))) {
       live.reset();
       const std::lock_guard lock(impl_->mutex);
       entry->branch = std::make_shared<const std::uint8_t>(0);
@@ -1233,7 +1236,7 @@ std::unique_ptr<ComponentTextCache::Lease> ComponentTextCache::Acquire(
     for (const auto& candidate : found.candidates) {
       if (restored || (cancelled && cancelled()))
         break;
-      if (candidate.live || !whole_inputs(candidate.boundary) ||
+      if (candidate.live || !request.WholeInputs(candidate.boundary) ||
           (candidate.boundary % alignment != 0 &&
            candidate.boundary < prompt.size()))
         continue;
@@ -1566,6 +1569,28 @@ bool ComponentTextCache::Lease::TryReserveSnapshot(
   if (!impl_->cache->ram_enabled && purpose != SnapshotPurpose::kBranchPoint &&
       impl_->cache->WithinDiskStep(tokens, At(impl_->input, tokens.size())))
     return false;
+  auto& cache = *impl_->cache;
+  if (purpose == SnapshotPurpose::kRetry && cache.ram_enabled &&
+      cache.retry_gap_tokens && (!cache.queue || !impl_->persist)) {
+    const auto alignment = std::max<std::size_t>(
+        1, cache.runner->Descriptor().capabilities.prefill_alignment);
+    const std::lock_guard lock(cache.mutex);
+    try {
+      const auto found = cache.index.Lookup(
+          {cache.identity, tokens, impl_->input.Through(tokens.size()),
+           std::min(impl_->stable, tokens.size())});
+      for (const auto& candidate : found.candidates) {
+        if (candidate.checkpoint && !candidate.durable &&
+            candidate.boundary < tokens.size() &&
+            tokens.size() - candidate.boundary <= cache.retry_gap_tokens &&
+            candidate.boundary % alignment == 0 &&
+            impl_->WholeInputs(candidate.boundary))
+          return false;
+      }
+    } catch (const cache::ResourceExhausted&) {
+      // Let ordinary retention try to reclaim space if the lookup cannot fit.
+    }
+  }
   impl_->capture_boundary = boundary;
   impl_->capture_tokens.assign(tokens.begin(), tokens.end());
   impl_->preserve_source = preserve;
